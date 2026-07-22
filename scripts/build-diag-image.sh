@@ -94,6 +94,7 @@ for m in "${mods[@]}"; do
 		continue
 	fi
 	cp -a "$m" "$IR/lib/modules/"
+	llvm-strip --strip-debug "$IR/lib/modules/$(basename "$m")"
 done
 
 # GPU firmware (OPPO signed ZAP + A530 microcode used by A512).
@@ -135,6 +136,16 @@ make -C "$LINUX" O=build ARCH=arm64 LLVM=1 -j"$(nproc)" \
 	cd "$IR"
 	find . -print0 | cpio --null -ov --format=newc
 ) | gzip -9 > "$BUILD/r11t-initramfs.cpio.gz"
+
+ramdisk_size=$(stat -c %s "$BUILD/r11t-initramfs.cpio.gz")
+ramdisk_limit=$((0x85600000 - 0x83000000))
+if (( ramdisk_size >= ramdisk_limit )); then
+	printf 'ERROR: ramdisk size %d crosses firmware reservation at 0x85600000\n' \
+		"$ramdisk_size" >&2
+	exit 1
+fi
+printf 'Ramdisk boundary: 0x%x (%d bytes free)\n' \
+	$((0x83000000 + ramdisk_size)) $((ramdisk_limit - ramdisk_size))
 
 # Append DTB to Image.gz for Qualcomm bootloader selection.
 cp "$BUILD/arch/arm64/boot/Image.gz" "$BUILD/arch/arm64/boot/Image.gz-dtb"
