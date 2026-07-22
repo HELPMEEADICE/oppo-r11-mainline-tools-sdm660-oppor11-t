@@ -89,6 +89,12 @@ mods=(
 	# Read-only external fuel-gauge support
 	"$BUILD/drivers/power/supply/bq27xxx_battery.ko"
 	"$BUILD/drivers/power/supply/bq27xxx_battery_i2c.ko"
+	# PM660L notification and camera flash LEDs
+	"$BUILD/drivers/leds/led-class-flash.ko"
+	"$BUILD/drivers/leds/led-class-multicolor.ko"
+	"$BUILD/drivers/leds/rgb/leds-qcom-lpg.ko"
+	"$BUILD/drivers/leds/trigger/ledtrig-pattern.ko"
+	"$BUILD/drivers/leds/flash/leds-qcom-flash.ko"
 	# Wi-Fi stack
 	"$BUILD/lib/crypto/libarc4.ko"
 	"$BUILD/net/rfkill/rfkill.ko"

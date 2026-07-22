@@ -153,6 +153,81 @@ done
 EOF
 chmod 0755 /bin/test_battery
 
+cat > /bin/test_leds << 'EOF'
+#!/bin/busybox sh
+for module in led-class-flash led-class-multicolor leds-qcom-lpg ledtrig-pattern leds-qcom-flash; do
+	insmod "/lib/modules/${module}.ko" 2>/dev/null || true
+done
+
+STATUS_LED=""
+FLASH_LED=""
+for led in /sys/class/leds/*; do
+	[ -d "$led" ] || continue
+	case "${led##*/}" in
+		*status*) STATUS_LED=$led ;;
+	esac
+	[ -e "$led/flash_strobe" ] && FLASH_LED=$led
+done
+
+show_led() {
+	led=$1
+	[ -n "$led" ] || return
+	echo "--- ${led##*/} ---"
+	for property in max_brightness brightness trigger flash_brightness \
+		flash_timeout flash_strobe flash_fault; do
+		[ -r "$led/$property" ] || continue
+		printf "%s=" "$property"
+		cat "$led/$property"
+	done
+}
+
+case "${1:-status}" in
+	status)
+		show_led "$STATUS_LED"
+		show_led "$FLASH_LED"
+		;;
+	breathe)
+		[ -n "$STATUS_LED" ] || { echo "white status LED not found"; exit 1; }
+		echo pattern > "$STATUS_LED/trigger" || exit 1
+		echo -1 > "$STATUS_LED/repeat" || exit 1
+		# Hardware LUT: about 3 mA peak, 0.4 s ramp, 0.7/2 s pauses.
+		echo "0 2000 0 0 16 100 16 0 32 100 32 0 48 100 48 0 64 700 64 0 48 100 48 0 32 100 32 0 16 100 16 0 0 100 0 0" \
+			> "$STATUS_LED/hw_pattern" || exit 1
+		echo "breathing=${STATUS_LED##*/}"
+		;;
+	torch)
+		[ -n "$FLASH_LED" ] || { echo "camera flash LED not found"; exit 1; }
+		# 64/255 of the 100 mA DT limit is about 25 mA.
+		echo 64 > "$FLASH_LED/brightness"
+		sleep 2
+		echo 0 > "$FLASH_LED/brightness"
+		echo "torch_test=complete"
+		;;
+	flash)
+		[ -n "$FLASH_LED" ] || { echo "camera flash LED not found"; exit 1; }
+		echo 100000 > "$FLASH_LED/flash_brightness"
+		echo 100000 > "$FLASH_LED/flash_timeout"
+		echo 1 > "$FLASH_LED/flash_strobe"
+		sleep 1
+		echo 0 > "$FLASH_LED/flash_strobe" 2>/dev/null || true
+		echo "flash_fault=$(cat "$FLASH_LED/flash_fault" 2>/dev/null)"
+		;;
+	off)
+		if [ -n "$STATUS_LED" ]; then
+			echo none > "$STATUS_LED/trigger"
+			echo 0 > "$STATUS_LED/brightness"
+		fi
+		[ -n "$FLASH_LED" ] && echo 0 > "$FLASH_LED/brightness"
+		echo "leds=off"
+		;;
+	*)
+		echo "usage: test_leds [status|breathe|torch|flash|off]"
+		exit 2
+		;;
+esac
+EOF
+chmod 0755 /bin/test_leds
+
 cat > /bin/test_audio << 'EOF'
 #!/bin/busybox sh
 mode=${1:-status}
@@ -531,6 +606,11 @@ for module in bq27xxx_battery bq27xxx_battery_i2c; do
 	insmod "/lib/modules/${module}.ko" 2>/dev/null || true
 done
 
+# Register LEDs in their off state; test_leds performs explicit safe tests.
+for module in led-class-flash led-class-multicolor leds-qcom-lpg ledtrig-pattern leds-qcom-flash; do
+	insmod "/lib/modules/${module}.ko" 2>/dev/null || true
+done
+
 # Display stack for fbcon/logo; failures must not kill the USB console.
 /bin/load_display
 
@@ -541,7 +621,7 @@ done
 stty -F /dev/ttyGS0 raw -echo
 exec </dev/ttyGS0 >/dev/ttyGS0 2>&1
 echo "OPPO R11T mainline Linux diagnostic shell"
-echo "Helpers: test_keys | test_display | test_touch | test_gpu | test_wifi | test_bt | test_audio | test_battery"
+echo "Helpers: test_keys | test_display | test_touch | test_gpu | test_wifi | test_bt | test_audio | test_battery | test_leds"
 uname -a
 cat /sys/firmware/devicetree/base/model
 echo
