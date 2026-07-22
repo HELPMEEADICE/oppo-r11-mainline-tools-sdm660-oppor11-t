@@ -47,8 +47,14 @@ resolve_part() {
 }
 
 mkdir -p /mnt/vendor /mnt/modem /lib/firmware /lib/modules
-VENDOR_DEV=$(resolve_part vendor)
-MODEM_DEV=$(resolve_part modem)
+VENDOR_DEV=""
+MODEM_DEV=""
+for retry in $(seq 1 100); do
+	[ -n "$VENDOR_DEV" ] || VENDOR_DEV=$(resolve_part vendor)
+	[ -n "$MODEM_DEV" ] || MODEM_DEV=$(resolve_part modem)
+	[ -n "$VENDOR_DEV" ] && [ -n "$MODEM_DEV" ] && break
+	sleep 0.1
+done
 if [ -n "$VENDOR_DEV" ]; then
 	mount -t ext4 -o ro "$VENDOR_DEV" /mnt/vendor 2>/dev/null || true
 fi
@@ -65,12 +71,14 @@ fi
 if [ -d /mnt/modem/image ]; then
 	ln -sfn /mnt/modem/image /lib/firmware/image 2>/dev/null
 	# MSS remoteproc often looks for mba.mbn/modem.mdt at firmware root.
-	for f in mba.mbn modem.mdt; do
+	for f in mba.mbn modem.mdt adsp.mdt; do
 		[ -f "/mnt/modem/image/$f" ] && ln -sf "/mnt/modem/image/$f" "/lib/firmware/$f"
 	done
-	for f in /mnt/modem/image/modem.b*; do
-		[ -f "$f" ] || continue
-		ln -sf "$f" "/lib/firmware/$(basename "$f")"
+	for image in modem adsp; do
+		for f in /mnt/modem/image/$image.b*; do
+			[ -f "$f" ] || continue
+			ln -sf "$f" "/lib/firmware/$(basename "$f")"
+		done
 	done
 fi
 
@@ -110,6 +118,98 @@ echo 0 > /sys/class/graphics/fb0/blank
 echo "Displayed $size-byte white frame"
 EOF
 chmod 0755 /bin/test_display
+
+cat > /bin/test_audio << 'EOF'
+#!/bin/busybox sh
+mode=${1:-status}
+jack_seconds=0
+case "$mode" in
+	*[!0-9]*) ;;
+	*) jack_seconds=$mode; mode=status ;;
+esac
+
+echo "=== load ADSP and audio stack ==="
+for m in qmi_helpers qrtr qrtr-smd qcom_pdr_msg pdr_interface qcom_pd_mapper mdt_loader qcom_pil_info qcom_common qcom_aoss qcom_sysmon qcom_q6v5 qcom_q6v5_pas pinctrl-lpass-lpi pinctrl-sdm660-lpass-lpi soundcore snd snd-timer snd-pcm snd-compress snd-soc-core snd-soc-qcom-common snd-q6dsp-common apr q6core q6afe q6afe-clocks q6afe-dai q6adm q6routing q6asm q6asm-dai snd-soc-msm8916-digital snd-soc-msm8916-analog snd-soc-ak4375 snd-soc-tfa989x snd-soc-sdm660-int; do
+	[ -f "/lib/modules/${m}.ko" ] || { echo "missing module $m"; exit 1; }
+	insmod "/lib/modules/${m}.ko" 2>/dev/null || true
+done
+
+ADSP_RPROC=""
+for retry in $(seq 1 100); do
+	for r in /sys/class/remoteproc/remoteproc*; do
+		[ -e "$r/name" ] || continue
+		case "$(cat "$r/name")" in
+			*adsp*) ADSP_RPROC="$r" ;;
+		esac
+	done
+	[ -n "$ADSP_RPROC" ] && break
+	sleep 0.1
+done
+if [ -z "$ADSP_RPROC" ]; then
+	echo "ADSP remoteproc did not register"
+	exit 1
+fi
+if [ "$(cat "$ADSP_RPROC/state" 2>/dev/null)" = offline ]; then
+	echo start > "$ADSP_RPROC/state" || exit 1
+fi
+for retry in $(seq 1 150); do
+	[ "$(cat "$ADSP_RPROC/state" 2>/dev/null)" = running ] && break
+	sleep 0.1
+done
+echo "adsp_name=$(cat "$ADSP_RPROC/name") state=$(cat "$ADSP_RPROC/state")"
+
+for retry in $(seq 1 200); do
+	[ -s /proc/asound/cards ] && ! grep -q '^--- no soundcards ---$' /proc/asound/cards && break
+	sleep 0.1
+done
+
+echo "=== ALSA cards ==="
+cat /proc/asound/cards 2>/dev/null
+echo "=== ALSA PCM ==="
+cat /proc/asound/pcm 2>/dev/null
+echo "=== jack ==="
+/bin/audio-jack-test "$jack_seconds"
+jack_rc=$?
+
+if [ "$mode" = play ]; then
+	echo "=== configure headset playback ==="
+	/bin/tinymix set 'PRI_MI2S_RX Audio Mixer MultiMedia1' 1 || exit 1
+	/bin/tinymix set 'HPL Mixer LDACL Switch' 1 || exit 1
+	/bin/tinymix set 'HPR Mixer RDACR Switch' 1 || exit 1
+	mkdir -p /tmp
+	/bin/audio-tone /tmp/r11t-tone.raw || exit 1
+	/bin/tinyplay /tmp/r11t-tone.raw -D 0 -d 0 -i raw -c 2 -r 48000 -b 16 -p 480 -n 8
+	echo "headset_play_rc=$?"
+fi
+
+if [ "$mode" = record ]; then
+	echo "=== configure headset capture ==="
+	/bin/tinymix set 'MultiMedia1 Mixer INT3_MI2S_TX' 1 || exit 1
+	/bin/tinymix set 'Digital CIC1 MUX' AMIC || exit 1
+	/bin/tinymix set 'Digital DEC1 MUX' ADC2 || exit 1
+	/bin/tinymix set 'ADC2 MUX' INP2 || exit 1
+	mkdir -p /tmp
+	/bin/tinycap /tmp/r11t-headset.wav -D 0 -d 0 -c 1 -r 48000 -b 16 -t 3
+	echo "headset_record_rc=$?"
+	ls -l /tmp/r11t-headset.wav
+fi
+
+if [ "$mode" = speaker ]; then
+	echo "=== configure low-level speaker playback ==="
+	/bin/tinymix set 'SEC_MI2S_RX Audio Mixer MultiMedia1' 1 || exit 1
+	/bin/tinymix set 'Amp Input' Left || exit 1
+	mkdir -p /tmp
+	/bin/audio-tone /tmp/r11t-tone.raw || exit 1
+	/bin/tinyplay /tmp/r11t-tone.raw -D 0 -d 0 -i raw -c 2 -r 48000 -b 16 -p 480 -n 8
+	echo "speaker_play_rc=$?"
+fi
+
+echo "=== audio diagnostics ==="
+dmesg | grep -Ei "adsp|apr|q6|audio|snd|asoc|codec|mbhc|headset|firmware|fatal|crash|fail|error" | tail -n 180
+echo "test_audio_rc=$jack_rc"
+exit "$jack_rc"
+EOF
+chmod 0755 /bin/test_audio
 
 cat > /bin/test_touch << 'EOF'
 #!/bin/busybox sh
@@ -402,7 +502,7 @@ done
 stty -F /dev/ttyGS0 raw -echo
 exec </dev/ttyGS0 >/dev/ttyGS0 2>&1
 echo "OPPO R11T mainline Linux diagnostic shell"
-echo "Helpers: test_keys | test_display | test_touch | test_gpu | test_wifi | test_bt"
+echo "Helpers: test_keys | test_display | test_touch | test_gpu | test_wifi | test_bt | test_audio"
 uname -a
 cat /sys/firmware/devicetree/base/model
 echo

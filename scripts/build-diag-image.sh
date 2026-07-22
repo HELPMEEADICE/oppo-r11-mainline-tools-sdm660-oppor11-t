@@ -37,6 +37,23 @@ llvm-strip "$IR/bin/bt-hci-test"
 aarch64-linux-gnu-gcc -static -Os -Wall -Wextra -Werror \
 	-o "$IR/bin/wifi-mac" "$SRC_INIT/wifi-mac.c"
 llvm-strip "$IR/bin/wifi-mac"
+aarch64-linux-gnu-gcc -static -Os -Wall -Wextra -Werror \
+	-o "$IR/bin/audio-jack-test" "$SRC_INIT/audio-jack-test.c"
+llvm-strip "$IR/bin/audio-jack-test"
+aarch64-linux-gnu-gcc -static -Os -Wall -Wextra -Werror \
+	-o "$IR/bin/audio-tone" "$SRC_INIT/audio-tone.c"
+llvm-strip "$IR/bin/audio-tone"
+TINYALSA_UTILS=${TINYALSA_UTILS:-/tmp/opencode/tinyalsa-r11t/utils}
+for tool in tinymix tinyplay tinycap; do
+	if [ -x "$TINYALSA_UTILS/$tool" ]; then
+		cp -a "$TINYALSA_UTILS/$tool" "$IR/bin/$tool"
+		llvm-strip "$IR/bin/$tool"
+	fi
+	if [ ! -x "$IR/bin/$tool" ]; then
+		echo "ERROR: missing static tinyalsa utility $tool" >&2
+		exit 1
+	fi
+done
 if [ -x /tmp/opencode/tqftpserv/tqftpserv.static ]; then
 	cp -a /tmp/opencode/tqftpserv/tqftpserv.static "$IR/bin/tqftpserv"
 fi
@@ -101,6 +118,32 @@ mods=(
 	"$BUILD/drivers/bluetooth/btbcm.ko"
 	"$BUILD/drivers/bluetooth/btrtl.ko"
 	"$BUILD/drivers/bluetooth/hci_uart.ko"
+	# ADSP and internal audio codec stack
+	"$BUILD/drivers/remoteproc/qcom_q6v5_pas.ko"
+	"$BUILD/drivers/soc/qcom/apr.ko"
+	"$BUILD/drivers/pinctrl/qcom/pinctrl-lpass-lpi.ko"
+	"$BUILD/drivers/pinctrl/qcom/pinctrl-sdm660-lpass-lpi.ko"
+	"$BUILD/sound/soundcore.ko"
+	"$BUILD/sound/core/snd.ko"
+	"$BUILD/sound/core/snd-timer.ko"
+	"$BUILD/sound/core/snd-pcm.ko"
+	"$BUILD/sound/core/snd-compress.ko"
+	"$BUILD/sound/soc/snd-soc-core.ko"
+	"$BUILD/sound/soc/qcom/snd-soc-qcom-common.ko"
+	"$BUILD/sound/soc/qcom/qdsp6/snd-q6dsp-common.ko"
+	"$BUILD/sound/soc/qcom/qdsp6/q6core.ko"
+	"$BUILD/sound/soc/qcom/qdsp6/q6afe.ko"
+	"$BUILD/sound/soc/qcom/qdsp6/q6afe-clocks.ko"
+	"$BUILD/sound/soc/qcom/qdsp6/q6afe-dai.ko"
+	"$BUILD/sound/soc/qcom/qdsp6/q6adm.ko"
+	"$BUILD/sound/soc/qcom/qdsp6/q6routing.ko"
+	"$BUILD/sound/soc/qcom/qdsp6/q6asm.ko"
+	"$BUILD/sound/soc/qcom/qdsp6/q6asm-dai.ko"
+	"$BUILD/sound/soc/codecs/snd-soc-msm8916-digital.ko"
+	"$BUILD/sound/soc/codecs/snd-soc-msm8916-analog.ko"
+	"$BUILD/sound/soc/codecs/snd-soc-ak4375.ko"
+	"$BUILD/sound/soc/codecs/snd-soc-tfa989x.ko"
+	"$BUILD/sound/soc/qcom/snd-soc-sdm660-int.ko"
 )
 
 rm -f "$IR"/lib/modules/*.ko
