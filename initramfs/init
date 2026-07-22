@@ -119,6 +119,40 @@ echo "Displayed $size-byte white frame"
 EOF
 chmod 0755 /bin/test_display
 
+cat > /bin/test_battery << 'EOF'
+#!/bin/busybox sh
+for module in bq27xxx_battery bq27xxx_battery_i2c; do
+	if ! lsmod | grep -q "^${module} "; then
+		insmod "/lib/modules/${module}.ko" || exit 1
+	fi
+done
+
+for retry in $(seq 1 50); do
+	for candidate in /sys/class/power_supply/*; do
+		[ -r "$candidate/capacity" ] || continue
+		BATTERY=$candidate
+		break
+	done
+	[ -n "$BATTERY" ] && break
+	sleep 0.1
+done
+
+if [ -z "$BATTERY" ]; then
+	echo "BQ27541 power_supply did not register"
+	dmesg | grep -Ei "bq27|battery|fuel|i2c" | tail -n 80
+	exit 1
+fi
+
+echo "device=${BATTERY##*/}"
+for property in present status capacity capacity_level voltage_now current_now temp \
+	charge_now charge_full charge_full_design cycle_count technology manufacturer; do
+	[ -r "$BATTERY/$property" ] || continue
+	printf "%s=" "$property"
+	cat "$BATTERY/$property"
+done
+EOF
+chmod 0755 /bin/test_battery
+
 cat > /bin/test_audio << 'EOF'
 #!/bin/busybox sh
 mode=${1:-status}
@@ -492,6 +526,11 @@ cat /tmp/diag-router.log 2>/dev/null | tail -n 80
 EOF
 chmod 0755 /bin/test_wifi
 
+# Make the board's read-only fuel gauge available without a module manager.
+for module in bq27xxx_battery bq27xxx_battery_i2c; do
+	insmod "/lib/modules/${module}.ko" 2>/dev/null || true
+done
+
 # Display stack for fbcon/logo; failures must not kill the USB console.
 /bin/load_display
 
@@ -502,7 +541,7 @@ done
 stty -F /dev/ttyGS0 raw -echo
 exec </dev/ttyGS0 >/dev/ttyGS0 2>&1
 echo "OPPO R11T mainline Linux diagnostic shell"
-echo "Helpers: test_keys | test_display | test_touch | test_gpu | test_wifi | test_bt | test_audio"
+echo "Helpers: test_keys | test_display | test_touch | test_gpu | test_wifi | test_bt | test_audio | test_battery"
 uname -a
 cat /sys/firmware/devicetree/base/model
 echo

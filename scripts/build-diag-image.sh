@@ -86,6 +86,9 @@ mods=(
 	"$BUILD/drivers/gpu/drm/msm/msm.ko"
 	"$BUILD/drivers/input/rmi4/rmi_core.ko"
 	"$BUILD/drivers/input/rmi4/rmi_i2c.ko"
+	# Read-only external fuel-gauge support
+	"$BUILD/drivers/power/supply/bq27xxx_battery.ko"
+	"$BUILD/drivers/power/supply/bq27xxx_battery_i2c.ko"
 	# Wi-Fi stack
 	"$BUILD/lib/crypto/libarc4.ko"
 	"$BUILD/net/rfkill/rfkill.ko"
