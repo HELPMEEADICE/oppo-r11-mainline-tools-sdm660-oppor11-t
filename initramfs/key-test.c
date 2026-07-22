@@ -21,7 +21,8 @@
 	(((array)[(bit) / BITS_PER_LONG] >> ((bit) % BITS_PER_LONG)) & 1UL)
 
 struct key_state {
-	unsigned int code;
+	unsigned int codes[2];
+	size_t code_count;
 	const char *name;
 	bool pressed;
 	bool released;
@@ -33,11 +34,19 @@ struct input_device {
 	char name[128];
 };
 
-static struct key_state keys[] = {
-	{ KEY_POWER, "POWER", false, false },
-	{ KEY_VOLUMEUP, "VOLUMEUP", false, false },
-	{ KEY_VOLUMEDOWN, "VOLUMEDOWN", false, false },
+static struct key_state physical_keys[] = {
+	{ { KEY_POWER }, 1, "POWER", false, false },
+	{ { KEY_VOLUMEUP }, 1, "VOLUMEUP", false, false },
+	{ { KEY_VOLUMEDOWN }, 1, "VOLUMEDOWN", false, false },
 };
+
+static struct key_state navigation_keys[] = {
+	{ { KEY_BACK }, 1, "BACK", false, false },
+	{ { KEY_APPSELECT, KEY_MENU }, 2, "MULTITASK", false, false },
+};
+
+static struct key_state *keys;
+static size_t key_count;
 
 static int64_t monotonic_ms(void)
 {
@@ -52,10 +61,12 @@ static int64_t monotonic_ms(void)
 static struct key_state *find_key(unsigned int code)
 {
 	size_t i;
+	size_t j;
 
-	for (i = 0; i < ARRAY_SIZE(keys); i++)
-		if (keys[i].code == code)
-			return &keys[i];
+	for (i = 0; i < key_count; i++)
+		for (j = 0; j < keys[i].code_count; j++)
+			if (keys[i].codes[j] == code)
+				return &keys[i];
 
 	return NULL;
 }
@@ -65,6 +76,7 @@ static bool supports_test_key(int fd)
 	unsigned long ev_bits[NBITS(EV_MAX + 1)] = { 0 };
 	unsigned long key_bits[NBITS(KEY_MAX + 1)] = { 0 };
 	size_t i;
+	size_t j;
 
 	if (ioctl(fd, EVIOCGBIT(0, sizeof(ev_bits)), ev_bits) < 0 ||
 	    !TEST_BIT(EV_KEY, ev_bits))
@@ -73,9 +85,10 @@ static bool supports_test_key(int fd)
 	if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(key_bits)), key_bits) < 0)
 		return false;
 
-	for (i = 0; i < ARRAY_SIZE(keys); i++)
-		if (TEST_BIT(keys[i].code, key_bits))
-			return true;
+	for (i = 0; i < key_count; i++)
+		for (j = 0; j < keys[i].code_count; j++)
+			if (TEST_BIT(keys[i].codes[j], key_bits))
+				return true;
 
 	return false;
 }
@@ -136,7 +149,7 @@ static bool all_keys_complete(void)
 {
 	size_t i;
 
-	for (i = 0; i < ARRAY_SIZE(keys); i++)
+	for (i = 0; i < key_count; i++)
 		if (!keys[i].pressed || !keys[i].released)
 			return false;
 
@@ -194,18 +207,24 @@ int main(int argc, char **argv)
 	struct input_device devices[32] = { 0 };
 	struct pollfd pollfds[ARRAY_SIZE(devices)];
 	int duration = 20;
+	bool navigation = false;
+	int arg = 1;
 	int64_t deadline;
 	int count;
 	int i;
 	int rc;
 
-	if (argc > 2) {
-		fprintf(stderr, "Usage: %s [seconds]\n", argv[0]);
+	if (arg < argc && strcmp(argv[arg], "--nav") == 0) {
+		navigation = true;
+		arg++;
+	}
+	if (argc - arg > 1) {
+		fprintf(stderr, "Usage: %s [--nav] [seconds]\n", argv[0]);
 		return 2;
 	}
-	if (argc == 2) {
+	if (arg < argc) {
 		char *end;
-		long value = strtol(argv[1], &end, 10);
+		long value = strtol(argv[arg], &end, 10);
 
 		if (*end || value < 1 || value > 300) {
 			fprintf(stderr, "Duration must be between 1 and 300 seconds\n");
@@ -213,10 +232,17 @@ int main(int argc, char **argv)
 		}
 		duration = value;
 	}
+	if (navigation) {
+		keys = navigation_keys;
+		key_count = ARRAY_SIZE(navigation_keys);
+	} else {
+		keys = physical_keys;
+		key_count = ARRAY_SIZE(physical_keys);
+	}
 
 	count = discover_devices(devices, ARRAY_SIZE(devices));
 	if (count <= 0) {
-		fprintf(stderr, "No input device exposes POWER/VOLUMEUP/VOLUMEDOWN\n");
+		fprintf(stderr, "No input device exposes the requested keys\n");
 		return 1;
 	}
 
@@ -225,7 +251,10 @@ int main(int argc, char **argv)
 		pollfds[i].events = POLLIN;
 	}
 
-	printf("Quickly press and release POWER, VOLUMEUP, and VOLUMEDOWN once.\n");
+	if (navigation)
+		printf("Quickly press and release BACK and MULTITASK once.\n");
+	else
+		printf("Quickly press and release POWER, VOLUMEUP, and VOLUMEDOWN once.\n");
 	printf("Listening for %d seconds...\n", duration);
 	deadline = monotonic_ms() + (int64_t)duration * 1000;
 
@@ -249,7 +278,7 @@ int main(int argc, char **argv)
 	}
 
 	printf("=== key test summary ===\n");
-	for (i = 0; i < (int)ARRAY_SIZE(keys); i++)
+	for (i = 0; i < (int)key_count; i++)
 		printf("%-10s press=%s release=%s %s\n", keys[i].name,
 		       keys[i].pressed ? "yes" : "no",
 		       keys[i].released ? "yes" : "no",
