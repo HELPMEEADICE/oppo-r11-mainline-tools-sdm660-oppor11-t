@@ -28,6 +28,9 @@ chmod 0755 "$IR/bin/gpu-msm-probe"
 aarch64-linux-gnu-gcc -static -Os -Wall -Wextra \
 	-o "$IR/bin/nl80211-scan" "$SRC_INIT/nl80211-scan.c"
 llvm-strip "$IR/bin/nl80211-scan"
+aarch64-linux-gnu-gcc -static -Os -Wall -Wextra \
+	-o "$IR/bin/test_keys" "$SRC_INIT/key-test.c"
+llvm-strip "$IR/bin/test_keys"
 if [ -x /tmp/opencode/tqftpserv/tqftpserv.static ]; then
 	cp -a /tmp/opencode/tqftpserv/tqftpserv.static "$IR/bin/tqftpserv"
 fi

@@ -320,7 +320,7 @@ done
 stty -F /dev/ttyGS0 raw -echo
 exec </dev/ttyGS0 >/dev/ttyGS0 2>&1
 echo "OPPO R11T mainline Linux diagnostic shell"
-echo "Helpers: test_display | test_touch | test_gpu | test_wifi"
+echo "Helpers: test_keys | test_display | test_touch | test_gpu | test_wifi"
 uname -a
 cat /sys/firmware/devicetree/base/model
 echo
