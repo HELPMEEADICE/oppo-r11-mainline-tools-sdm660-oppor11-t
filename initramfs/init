@@ -228,6 +228,117 @@ esac
 EOF
 chmod 0755 /bin/test_leds
 
+cat > /bin/test_usb_host << 'EOF'
+#!/bin/busybox sh
+ROLE=""
+for path in /sys/class/usb_role/*/role; do
+	[ -e "$path" ] || continue
+	ROLE=$path
+	break
+done
+
+[ -n "$ROLE" ] || { echo "USB role switch not found"; exit 1; }
+
+case "${1:-status}" in
+	status)
+		echo "role=$(cat "$ROLE")"
+		for dev in /sys/bus/usb/devices/[0-9]*; do
+			[ -d "$dev" ] || continue
+			printf '%s' "${dev##*/}"
+			[ -r "$dev/idVendor" ] && printf ' %s:%s' "$(cat "$dev/idVendor")" "$(cat "$dev/idProduct")"
+			[ -r "$dev/product" ] && printf ' %s' "$(cat "$dev/product")"
+			echo
+		done
+		;;
+	start)
+		[ "$$" -eq 1 ] || {
+			echo "run from the main shell as: exec test_usb_host start"
+			exit 1
+		}
+		[ "$(cat "$ROLE")" = "device" ] || {
+			echo "USB must begin in device role"
+			exit 1
+		}
+		UDC_FILE=/sys/kernel/config/usb_gadget/r11t/UDC
+		[ -r "$UDC_FILE" ] || { echo "USB gadget UDC binding not found"; exit 1; }
+		UDC=$(cat "$UDC_FILE")
+		[ -n "$UDC" ] || { echo "USB gadget is not bound"; exit 1; }
+		CACHE_DEV=""
+		for uevent in /sys/class/block/mmcblk*p*/uevent; do
+			[ -r "$uevent" ] || continue
+			grep -q '^PARTNAME=cache$' "$uevent" || continue
+			CACHE_DEV="/dev/$(basename "$(dirname "$uevent")")"
+			break
+		done
+		[ -n "$CACHE_DEV" ] || { echo "cache partition not found"; exit 1; }
+		mkdir -p /mnt/usb-host-cache /tmp
+		mount -t ext4 "$CACHE_DEV" /mnt/usb-host-cache || exit 1
+		LOG=/mnt/usb-host-cache/mainline-usb-host-result.log
+		echo "Unplug the PC and connect the OTG device within 10 seconds"
+		echo "Press keys for 15 seconds; the phone will reboot to Android"
+		sleep 10
+
+		# This script is PID 1. Close the ACM tty before unbinding its UDC.
+		exec </dev/null >"$LOG" 2>&1
+		echo "role_before=$(cat "$ROLE")"
+		echo "" > "$UDC_FILE"
+		sleep 2
+		echo host > "$ROLE"
+		sleep 3
+		echo "role_host=$(cat "$ROLE")"
+		found=0
+		for i in $(seq 1 20); do
+			for dev in /sys/bus/usb/devices/[0-9]-*; do
+				[ -r "$dev/idVendor" ] || continue
+				echo "usb_device=${dev##*/} vid=$(cat "$dev/idVendor") pid=$(cat "$dev/idProduct") product=$(cat "$dev/product" 2>/dev/null)"
+				found=1
+			done
+			[ "$found" -eq 1 ] && break
+			sleep 1
+		done
+		for block in /dev/sd?; do
+			[ -b "$block" ] || continue
+			echo "block_device=$block"
+			dd if="$block" bs=4096 count=1 2>/dev/null | sha256sum
+		done
+		input_found=0
+		for event_sysfs in /sys/class/input/event*; do
+			[ -e "$event_sysfs/device" ] || continue
+			case "$(readlink -f "$event_sysfs/device")" in
+				*usb*) ;;
+				*) continue ;;
+			esac
+			event="/dev/input/${event_sysfs##*/}"
+			echo "usb_input=$event"
+			timeout 10 dd if="$event" of=/tmp/usb-input-event.bin bs=24 count=1 2>/dev/null || true
+			bytes=$(wc -c < /tmp/usb-input-event.bin)
+			echo "input_bytes=$bytes"
+			if [ "$bytes" -gt 0 ]; then
+				sha256sum /tmp/usb-input-event.bin
+				input_found=1
+				break
+			fi
+		done
+		echo "device_found=$found"
+		echo "input_found=$input_found"
+		echo "test_complete=1"
+		sync
+		exec >/dev/null 2>&1
+		umount /mnt/usb-host-cache
+		reboot -f
+		;;
+	result)
+		echo "read /cache/mainline-usb-host-result.log from Android"
+		;;
+	*)
+		echo "usage: test_usb_host [status|start|result]"
+		echo "start must be invoked as: exec test_usb_host start"
+		exit 2
+		;;
+esac
+EOF
+chmod 0755 /bin/test_usb_host
+
 cat > /bin/test_audio << 'EOF'
 #!/bin/busybox sh
 mode=${1:-status}
@@ -621,7 +732,7 @@ done
 stty -F /dev/ttyGS0 raw -echo
 exec </dev/ttyGS0 >/dev/ttyGS0 2>&1
 echo "OPPO R11T mainline Linux diagnostic shell"
-echo "Helpers: test_keys | test_display | test_touch | test_gpu | test_wifi | test_bt | test_audio | test_battery | test_leds"
+echo "Helpers: test_keys | test_display | test_touch | test_gpu | test_wifi | test_bt | test_audio | test_battery | test_leds | test_usb_host"
 uname -a
 cat /sys/firmware/devicetree/base/model
 echo
